@@ -126,10 +126,7 @@ pub(super) fn gen_function(
             FnKind::Method(ref type_name, ref method_kind) => {
                 // Method, or static method.
                 impl_entry = Some(fn_generator.generate_method_impl(
-                    matches!(
-                        method_kind,
-                        MethodKind::MakeUnique | MethodKind::Constructor
-                    ),
+                    matches!(method_kind, MethodKind::Constructor),
                     type_name,
                     &ret_type,
                 ));
@@ -353,6 +350,7 @@ impl<'a> FnGenerator<'a> {
         Box::new(ImplBlockDetails {
             item: ImplItem::Method(parse_quote! {
                 #doc_attr
+                #[autocxx::derive_make_unique]
                 pub #unsafety fn #rust_name #lifetime_param ( #wrapper_params ) -> impl autocxx::moveit::new::New<Output=Self> #lifetime_addition {
                     #body
                 }

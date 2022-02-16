@@ -84,7 +84,6 @@ pub(crate) enum ReceiverMutability {
 pub(crate) enum MethodKind {
     Normal(ReceiverMutability),
     Constructor,
-    MakeUnique,
     Static,
     Virtual(ReceiverMutability),
     PureVirtual(ReceiverMutability),
@@ -421,7 +420,6 @@ impl<'a> FnAnalyzer<'a> {
         name: ApiName,
         fun: Box<FuncToConvert>,
     ) -> Result<Box<dyn Iterator<Item = Api<FnPhase1>>>, ConvertErrorWithContext> {
-        let initial_name = name.clone();
         let (analysis, name) =
             self.analyze_foreign_fn(name, &fun, TypeConversionSophistication::Regular, None);
         let mut results = Vec::new();
@@ -429,9 +427,6 @@ impl<'a> FnAnalyzer<'a> {
         // Consider whether we need to synthesize subclass items.
         match &analysis.kind {
             FnKind::Method(sup, MethodKind::Constructor) => {
-                // Create a make_unique too
-                self.create_make_unique(&fun, initial_name, &mut results);
-
                 for sub in self.subclasses_by_superclass(sup) {
                     // Create a subclass constructor. This is a synthesized function
                     // which didn't exist in the original C++.
@@ -442,12 +437,6 @@ impl<'a> FnAnalyzer<'a> {
                         subclass_constructor_func.clone(),
                         &mut results,
                         TypeConversionSophistication::Regular,
-                    );
-                    // and its corresponding make_unique
-                    self.create_make_unique(
-                        &subclass_constructor_func,
-                        subclass_constructor_name,
-                        &mut results,
                     );
                 }
             }
@@ -550,25 +539,6 @@ impl<'a> FnAnalyzer<'a> {
             name,
             name_for_gc: None,
         });
-    }
-
-    /// Take a constructor e.g. pub fn A_A(this: *mut root::A);
-    /// and synthesize a make_unique e.g. pub fn make_unique() -> cxx::UniquePtr<A>
-    fn create_make_unique(
-        &mut self,
-        fun: &FuncToConvert,
-        initial_name: ApiName,
-        results: &mut Vec<Api<FnPhase1>>,
-    ) {
-        let mut new_fun = fun.clone();
-        new_fun.provenance = Provenance::SynthesizedMakeUnique;
-        let make_unique_func = Box::new(new_fun);
-        self.analyze_and_add(
-            initial_name,
-            make_unique_func,
-            results,
-            TypeConversionSophistication::Regular,
-        );
     }
 
     /// Determine how to materialize a function.
@@ -774,17 +744,9 @@ impl<'a> FnAnalyzer<'a> {
                     rust_name,
                 )
             } else {
-                let method_kind = if matches!(fun.provenance, Provenance::SynthesizedMakeUnique) {
-                    // We're re-running this routine for a function we already analyzed.
-                    // Previously we made a placement "new" (MethodKind::Constructor).
-                    // This time we've asked ourselves to synthesize a make_unique.
-                    let constructor_suffix = rust_name.strip_prefix(nested_type_ident).unwrap();
-                    rust_name = format!("make_unique{}", constructor_suffix);
-                    // Strip off the 'this' arg.
-                    params = params.into_iter().skip(1).collect();
-                    param_details.remove(0);
-                    MethodKind::MakeUnique
-                } else if let Some(constructor_suffix) = rust_name.strip_prefix(nested_type_ident) {
+                let method_kind = if let Some(constructor_suffix) =
+                    rust_name.strip_prefix(nested_type_ident)
+                {
                     // It's a constructor. bindgen generates
                     // fn Type(this: *mut Type, ...args)
                     // We want
@@ -969,7 +931,6 @@ impl<'a> FnAnalyzer<'a> {
                 FnKind::Method(
                     ref self_ty,
                     MethodKind::Constructor
-                    | MethodKind::MakeUnique
                     | MethodKind::Normal(..)
                     | MethodKind::PureVirtual(..)
                     | MethodKind::Virtual(..),
@@ -1013,26 +974,12 @@ impl<'a> FnAnalyzer<'a> {
 
         // Analyze the return type, just as we previously did for the
         // parameters.
-        let mut return_analysis = if let FnKind::Method(ref self_ty, MethodKind::MakeUnique) = kind
-        {
-            let constructed_type = self_ty.to_type_path();
-            ReturnTypeAnalysis {
-                rt: parse_quote! {
-                    -> #constructed_type
-                },
-                conversion: Some(TypeConversionPolicy::new_to_unique_ptr(parse_quote! {
-                    #constructed_type
-                })),
-                was_reference: false,
-                deps: std::iter::once(self_ty).cloned().collect(),
-            }
-        } else {
-            self.convert_return_type(&fun.output, ns, &fun.references)
-                .unwrap_or_else(|err| {
-                    set_ignore_reason(err);
-                    ReturnTypeAnalysis::default()
-                })
-        };
+        let mut return_analysis = self
+            .convert_return_type(&fun.output, ns, &fun.references)
+            .unwrap_or_else(|err| {
+                set_ignore_reason(err);
+                ReturnTypeAnalysis::default()
+            });
         let mut deps = params_deps;
         deps.extend(return_analysis.deps.drain());
 
@@ -1092,9 +1039,6 @@ impl<'a> FnAnalyzer<'a> {
             let (payload, cpp_function_kind) = match fun.synthetic_cpp.as_ref().cloned() {
                 Some((payload, cpp_function_kind)) => (payload, cpp_function_kind),
                 None => match kind {
-                    FnKind::Method(_, MethodKind::MakeUnique) => {
-                        (CppFunctionBody::MakeUnique, CppFunctionKind::Function)
-                    }
                     FnKind::Method(ref self_ty, MethodKind::Constructor)
                     | FnKind::TraitMethod {
                         kind: TraitMethodKind::CopyConstructor | TraitMethodKind::MoveConstructor,
@@ -1142,9 +1086,7 @@ impl<'a> FnAnalyzer<'a> {
             params.clear();
             for pd in &param_details {
                 let type_name = pd.conversion.converted_rust_type();
-                let arg_name = if pd.self_type.is_some()
-                    && !matches!(kind, FnKind::Method(_, MethodKind::MakeUnique))
-                {
+                let arg_name = if pd.self_type.is_some() {
                     parse_quote!(autocxx_gen_this)
                 } else {
                     pd.name.clone()

@@ -80,7 +80,7 @@ pub(crate) fn mark_types_abstract(mut apis: Vec<Api<FnPhase1>>) -> Vec<Api<FnPha
         Api::Function {
             analysis:
                 FnAnalysis {
-                    kind: FnKind::Method(self_ty, MethodKind::MakeUnique | MethodKind::Constructor)
+                    kind: FnKind::Method(self_ty, MethodKind::Constructor)
                         | FnKind::TraitMethod{ kind: TraitMethodKind::CopyConstructor | TraitMethodKind::MoveConstructor, impl_for: self_ty, ..},
                     ..
                 },
