@@ -1545,12 +1545,6 @@ impl<'a> FnAnalyzer<'a> {
                         cpp_conversion: CppConversionType::FromUniquePtrToValue,
                         rust_conversion: RustConversionType::None,
                     }
-                } else if is_rvalue_ref {
-                    TypeConversionPolicy {
-                        unwrapped_type: ty,
-                        cpp_conversion: CppConversionType::FromPtrToValue,
-                        rust_conversion: RustConversionType::FromRValueParamToPtr,
-                    }
                 } else {
                     TypeConversionPolicy {
                         unwrapped_type: ty,
@@ -1559,7 +1553,7 @@ impl<'a> FnAnalyzer<'a> {
                     }
                 }
             }
-            _ => {
+            Type::Ptr(tp) => {
                 let rust_conversion = force_rust_conversion.unwrap_or(RustConversionType::None);
                 if is_move_constructor {
                     TypeConversionPolicy {
@@ -1567,12 +1561,26 @@ impl<'a> FnAnalyzer<'a> {
                         cpp_conversion: CppConversionType::FromPtrToMove,
                         rust_conversion,
                     }
+                } else if is_rvalue_ref {
+                    TypeConversionPolicy {
+                        unwrapped_type: *tp.elem.clone(),
+                        cpp_conversion: CppConversionType::FromPtrToValue,
+                        rust_conversion: RustConversionType::FromRValueParamToPtr,
+                    }
                 } else {
                     TypeConversionPolicy {
                         unwrapped_type: ty.clone(),
                         cpp_conversion: CppConversionType::None,
                         rust_conversion,
                     }
+                }
+            }
+            _ => {
+                let rust_conversion = force_rust_conversion.unwrap_or(RustConversionType::None);
+                TypeConversionPolicy {
+                    unwrapped_type: ty.clone(),
+                    cpp_conversion: CppConversionType::None,
+                    rust_conversion,
                 }
             }
         }
