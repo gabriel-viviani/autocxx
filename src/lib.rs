@@ -821,6 +821,8 @@ pub trait PinMut<T>: AsRef<T> {
     fn pin_mut(&mut self) -> std::pin::Pin<&mut T>;
 }
 
+pub use value_param::RValueParam;
+pub use value_param::RValueParamHandler;
 pub use value_param::ValueParam;
 pub use value_param::ValueParamHandler;
 

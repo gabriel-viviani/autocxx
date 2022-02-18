@@ -16,6 +16,33 @@ use moveit::{CopyNew, New};
 
 use std::{marker::PhantomPinned, mem::MaybeUninit, pin::Pin};
 
+#[doc(hidden)]
+/// Trait representing either a value or rvalue parameter.
+pub trait Param<T> {
+    /// Any stack storage required. If, as part of passing to C++,
+    /// we need to store a temporary copy of the value, this will be `T`,
+    /// otherwise `()`.
+    #[doc(hidden)]
+    type StackStorage;
+    /// Whether this `ValueParam` requires temporary Rust-side storage of
+    /// an extra copy of this value.
+    #[doc(hidden)]
+    fn needs_stack_space(&self) -> bool;
+    /// Populate the stack storage given as a parameter. Only called if you
+    /// return `true` from `needs_stack_space`.
+    #[doc(hidden)]
+    fn populate_stack_space(&self, this: Pin<&mut MaybeUninit<Self::StackStorage>>);
+    /// Return a pointer to the storage.
+    /// Only called if `needs_stack_space` returns `false`, otherwise the pointer
+    /// to the stack space will be used.
+    /// Note that this returns a _mutable_ pointer. This is a big deal. That's
+    /// because, on the C++ side, we'll call `std::move(*ptr)` on this pointer.
+    /// This is unlikely to be semantically acceptable long-term, but currently
+    /// makes it 'quicker' when a [`cxx::UniquePtr`] is used as a value parameter.
+    #[doc(hidden)]
+    fn get_ptr(&mut self) -> *mut T;
+}
+
 /// A trait representing a parameter to a C++ function which is received
 /// by value.
 ///
@@ -51,32 +78,11 @@ use std::{marker::PhantomPinned, mem::MaybeUninit, pin::Pin};
 ///
 /// The implementations of this trait which take a [`cxx::UniquePtr`] will
 /// panic if the pointer is NULL.
-pub trait ValueParam<T> {
-    /// Any stack storage required. If, as part of passing to C++,
-    /// we need to store a temporary copy of the value, this will be `T`,
-    /// otherwise `()`.
-    #[doc(hidden)]
-    type StackStorage;
-    /// Whether this `ValueParam` requires temporary Rust-side storage of
-    /// an extra copy of this value.
-    #[doc(hidden)]
-    fn needs_stack_space(&self) -> bool;
-    /// Populate the stack storage given as a parameter. Only called if you
-    /// return `true` from `needs_stack_space`.
-    #[doc(hidden)]
-    fn populate_stack_space(&self, this: Pin<&mut MaybeUninit<Self::StackStorage>>);
-    /// Return a pointer to the storage.
-    /// Only called if `needs_stack_space` returns `false`, otherwise the pointer
-    /// to the stack space will be used.
-    /// Note that this returns a _mutable_ pointer. This is a big deal. That's
-    /// because, on the C++ side, we'll call `std::move(*ptr)` on this pointer.
-    /// This is unlikely to be semantically acceptable long-term, but currently
-    /// makes it 'quicker' when a [`cxx::UniquePtr`] is used as a value parameter.
-    #[doc(hidden)]
-    fn get_ptr(&mut self) -> *mut T;
-}
+pub trait ValueParam<T>: Param<T> {}
 
-impl<T> ValueParam<T> for &T
+pub trait RValueParam<T>: Param<T> {}
+
+impl<T> Param<T> for &T
 where
     T: CopyNew,
 {
@@ -95,7 +101,9 @@ where
     }
 }
 
-impl<T> ValueParam<T> for UniquePtr<T>
+impl<T> ValueParam<T> for &T where T: CopyNew {}
+
+impl<T> Param<T> for UniquePtr<T>
 where
     T: UniquePtrTarget,
 {
@@ -117,7 +125,9 @@ where
     }
 }
 
-impl<T> ValueParam<T> for &UniquePtr<T>
+impl<T> ValueParam<T> for UniquePtr<T> where T: UniquePtrTarget {}
+
+impl<T> Param<T> for &UniquePtr<T>
 where
     T: UniquePtrTarget + CopyNew,
 {
@@ -144,7 +154,9 @@ where
     }
 }
 
-impl<T> ValueParam<T> for T
+impl<T> ValueParam<T> for &UniquePtr<T> where T: UniquePtrTarget + CopyNew {}
+
+impl<T> Param<T> for T
 where
     T: CopyNew,
 {
@@ -163,19 +175,49 @@ where
     }
 }
 
+impl<T> ValueParam<T> for T where T: CopyNew {}
+
+impl<T> RValueParam<T> for UniquePtr<T> where T: UniquePtrTarget {}
+
 /// Implementation detail for how we pass value parameters into C++.
 /// This type is instantiated by auto-generated autocxx code each time we
 /// need to pass a value parameter into C++, and will take responsibility
 /// for extracting that value parameter from the [`ValueParam`] and doing
 /// any later cleanup.
 #[doc(hidden)]
-pub struct ValueParamHandler<T, VP: ValueParam<T>> {
-    param: VP,
-    space: Option<MaybeUninit<VP::StackStorage>>,
+pub struct ParamHandler<T, P: Param<T>> {
+    param: P,
+    space: Option<MaybeUninit<P::StackStorage>>,
     _pinned: PhantomPinned,
 }
 
+#[doc(hidden)]
+pub struct ValueParamHandler<T, VP: ValueParam<T>>(ParamHandler<T, VP>);
+
 impl<T, VP: ValueParam<T>> ValueParamHandler<T, VP> {
+    pub unsafe fn new(param: VP) -> Self {
+        Self(ParamHandler::new(param))
+    }
+
+    pub fn get_ptr(&mut self) -> *mut T {
+        self.0.get_ptr()
+    }
+}
+
+#[doc(hidden)]
+pub struct RValueParamHandler<T, RVP: RValueParam<T>>(ParamHandler<T, RVP>);
+
+impl<T, RVP: RValueParam<T>> RValueParamHandler<T, RVP> {
+    pub unsafe fn new(param: RVP) -> Self {
+        Self(ParamHandler::new(param))
+    }
+
+    pub fn get_ptr(&mut self) -> *mut T {
+        self.0.get_ptr()
+    }
+}
+
+impl<T, P: Param<T>> ParamHandler<T, P> {
     /// Create a new storage space for something that's about to be passed
     /// by value to C++. Depending on the `ValueParam` type passed in,
     /// this may be largely a no-op or it may involve storing a whole
@@ -185,7 +227,7 @@ impl<T, VP: ValueParam<T>> ValueParamHandler<T, VP> {
     ///
     /// Callers must guarantee that this type will not move
     /// in memory.
-    pub unsafe fn new(param: VP) -> Self {
+    pub unsafe fn new(param: P) -> Self {
         let mut this = Self {
             param,
             space: None,
@@ -204,8 +246,7 @@ impl<T, VP: ValueParam<T>> ValueParamHandler<T, VP> {
     /// since it was created.
     pub fn get_ptr(&mut self) -> *mut T {
         if let Some(ref mut space) = self.space {
-            let ptr =
-                unsafe { space.assume_init_mut() } as *mut <VP as ValueParam<T>>::StackStorage;
+            let ptr = unsafe { space.assume_init_mut() } as *mut <P as Param<T>>::StackStorage;
             unsafe { std::mem::transmute(ptr) }
         } else {
             self.param.get_ptr()
@@ -213,7 +254,7 @@ impl<T, VP: ValueParam<T>> ValueParamHandler<T, VP> {
     }
 }
 
-impl<T, VP: ValueParam<T>> Drop for ValueParamHandler<T, VP> {
+impl<T, P: Param<T>> Drop for ParamHandler<T, P> {
     fn drop(&mut self) {
         if let Some(space) = self.space.take() {
             unsafe { space.assume_init() };
