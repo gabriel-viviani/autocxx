@@ -185,7 +185,7 @@ impl<T> RValueParam<T> for UniquePtr<T> where T: UniquePtrTarget {}
 /// for extracting that value parameter from the [`ValueParam`] and doing
 /// any later cleanup.
 #[doc(hidden)]
-pub struct ParamHandler<T, P: Param<T>> {
+struct ParamHandler<T, P: Param<T>> {
     param: P,
     space: Option<MaybeUninit<P::StackStorage>>,
     _pinned: PhantomPinned,
@@ -227,7 +227,7 @@ impl<T, P: Param<T>> ParamHandler<T, P> {
     ///
     /// Callers must guarantee that this type will not move
     /// in memory.
-    pub unsafe fn new(param: P) -> Self {
+    unsafe fn new(param: P) -> Self {
         let mut this = Self {
             param,
             space: None,
@@ -244,7 +244,7 @@ impl<T, P: Param<T>> ParamHandler<T, P> {
     /// Return a pointer to the underlying value which can be passed to C++.
     /// Per the unsafety contract of `new`, the object must not have moved
     /// since it was created.
-    pub fn get_ptr(&mut self) -> *mut T {
+    fn get_ptr(&mut self) -> *mut T {
         if let Some(ref mut space) = self.space {
             let ptr = unsafe { space.assume_init_mut() } as *mut <P as Param<T>>::StackStorage;
             unsafe { std::mem::transmute(ptr) }
