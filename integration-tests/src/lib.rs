@@ -304,11 +304,7 @@ impl BuilderContext for TestBuilderContext {
     }
 }
 
-pub fn run_doctest(
-    cxx_code: &str,
-    header_code: &str,
-    rust_code: TokenStream
-) {
+pub fn run_doctest(cxx_code: &str, header_code: &str, rust_code: TokenStream) {
     do_run_test_manual(cxx_code, header_code, rust_code, None, None).unwrap();
 }
 
