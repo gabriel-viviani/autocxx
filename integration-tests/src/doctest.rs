@@ -15,6 +15,6 @@
 #[macro_export]
 macro_rules! autocxx_doctest {
     ($cpp:expr,$hdr:expr,$rs:tt) => {
-        autocxx_integration_tests::run_doctest($cpp, $hdr, quote::quote! $rs )
+        autocxx_integration_tests::run_doctest($cpp, $hdr, $rs)
     };
 }

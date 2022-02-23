@@ -9,7 +9,7 @@ autocxx_integration_tests::doctest!(
         #include <stdint.h>
         inline uint32_t do_math() { return 3; }
     "),
-    {
+    quote::quote!{
         use autocxx::prelude::*;
 
         include_cpp! {
