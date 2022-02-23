@@ -55,7 +55,7 @@ fn substitute_chapter(chapter: &str) -> String {
                 }
                 LineType::CodeBlockStateNoPlayground => {
                     push_line = false;
-                    ChapterParseState::CandidateCodeBlock
+                    ChapterParseState::CandidateCodeBlock(line.to_string())
                 }
                 LineType::Macro => panic!("Found macro outside code block"),
                 LineType::Misc => ChapterParseState::Start,
@@ -68,14 +68,17 @@ fn substitute_chapter(chapter: &str) -> String {
                 LineType::Misc => ChapterParseState::OtherCodeBlock,
                 _ => panic!("Found confusing conflicting block markers"),
             },
-            ChapterParseState::CandidateCodeBlock => match line_type {
-                LineType::Macro => ChapterParseState::OurCodeBlock(Vec::new()),
+            ChapterParseState::CandidateCodeBlock(entry_line) => match line_type {
+                LineType::Macro => {
+                    push_line = false;
+                    ChapterParseState::OurCodeBlock(Vec::new())
+                },
                 LineType::Misc => {
-                    out.push("```rust,noplayground".to_string());
+                    out.push(entry_line);
                     ChapterParseState::OtherCodeBlock
                 }
                 LineType::EndCodeBlock => {
-                    out.push("```rust,noplayground".to_string());
+                    out.push(entry_line);
                     ChapterParseState::Start
                 }
                 _ => panic!("Found confusing conflicting block markers"),
@@ -83,6 +86,7 @@ fn substitute_chapter(chapter: &str) -> String {
             ChapterParseState::OurCodeBlock(lines) => match line_type {
                 LineType::Misc => {
                     push_line = false;
+                    lines.push(line.to_string());
                     ChapterParseState::OurCodeBlock(lines)
                 }
                 LineType::EndCodeBlock => {
@@ -102,8 +106,8 @@ fn substitute_chapter(chapter: &str) -> String {
 enum ChapterParseState {
     Start,
     OtherCodeBlock,
-    CandidateCodeBlock,        // have found rust,noplayground
-    OurCodeBlock(Vec<String>), // have found #[autocxx_integration_tests::doctest]
+    CandidateCodeBlock(String), // have found rust,noplayground
+    OurCodeBlock(Vec<String>),  // have found #[autocxx_integration_tests::doctest]
 }
 
 enum LineType {
