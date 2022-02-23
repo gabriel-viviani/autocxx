@@ -12,6 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::{borrow::Cow, io, process};
+
+use anyhow::Error;
+use clap::{crate_authors, crate_version, App, Arg, SubCommand};
+use itertools::Itertools;
+use mdbook::{book::Book, preprocess::CmdPreprocessor};
+use proc_macro2::Span;
+use syn::{spanned::Spanned, Expr};
+
 fn main() {
     let matches = App::new("autocxx-mdbook-preprocessor")
         .version(crate_version!())
@@ -21,15 +30,16 @@ fn main() {
             SubCommand::with_name("supports")
                 .arg(Arg::with_name("renderer").required(true))
                 .about("Whether a given renderer is supported by this preprocessor"),
-        );
-    if let Some(sub_args) = matches.subcommand_matches("supports") {
+        )
+        .get_matches();
+    if let Some(_) = matches.subcommand_matches("supports") {
         process::exit(0); // we support all.
     }
-    preprocess.unwrap();
+    preprocess().unwrap();
 }
 
 fn preprocess() -> Result<(), Error> {
-    let (ctx, book) = CmdPreprocessor::parse_input(io::stdin())?;
+    let (_, mut book) = CmdPreprocessor::parse_input(io::stdin())?;
 
     Book::for_each_mut(&mut book, |sec| {
         if let mdbook::BookItem::Chapter(chapter) = sec {
@@ -37,7 +47,7 @@ fn preprocess() -> Result<(), Error> {
         }
     });
 
-    serde_json::to_writer(io::stdout(), &processed_book)?;
+    serde_json::to_writer(io::stdout(), &book)?;
 
     Ok(())
 }
@@ -72,24 +82,24 @@ fn substitute_chapter(chapter: &str) -> String {
                 LineType::Macro => {
                     push_line = false;
                     ChapterParseState::OurCodeBlock(Vec::new())
-                },
+                }
                 LineType::Misc => {
                     out.push(entry_line);
                     ChapterParseState::OtherCodeBlock
                 }
-                LineType::EndCodeBlock => {
+                LineType::CodeBlockEnd => {
                     out.push(entry_line);
                     ChapterParseState::Start
                 }
                 _ => panic!("Found confusing conflicting block markers"),
             },
-            ChapterParseState::OurCodeBlock(lines) => match line_type {
+            ChapterParseState::OurCodeBlock(mut lines) => match line_type {
                 LineType::Misc => {
                     push_line = false;
                     lines.push(line.to_string());
                     ChapterParseState::OurCodeBlock(lines)
                 }
-                LineType::EndCodeBlock => {
+                LineType::CodeBlockEnd => {
                     out.extend(handle_code_block(lines));
                     ChapterParseState::Start
                 }
@@ -135,13 +145,17 @@ fn recognize_line(line: &str) -> LineType {
 fn handle_code_block(lines: Vec<String>) -> impl Iterator<Item = String> {
     let input = std::iter::once("fake_function(".to_string())
         .chain(lines.into_iter())
-        .chain(std::iter::once(");"))
+        .chain(std::iter::once(");".to_string()))
         .collect_vec();
-    let fn_call: syn::ExprCall = syn::parse_str(&input.join("\n")).expect("Unable to parse");
+    let fn_call = syn::parse_str::<syn::Expr>(&input.join("\n")).expect("Unable to parse");
+    let fn_call = match fn_call {
+        Expr::Call(expr) => expr,
+        _ => panic!("Parsing unexpected"),
+    };
     let mut args_iter = fn_call.args.iter();
-    let cpp = extract_span(&input, args_iter.next().unwrap());
-    let hdr = extract_span(&input, args_iter.next().unwrap());
-    let rs = extract_span(&input, args_iter.next().unwrap());
+    let cpp = extract_span(&input, args_iter.next().unwrap().span());
+    let hdr = extract_span(&input, args_iter.next().unwrap().span());
+    let rs = extract_span(&input, args_iter.next().unwrap().span());
     let mut output = Vec::new();
     output.push("C++ header:".to_string());
     output.push("```cpp".to_string());
@@ -168,13 +182,13 @@ fn extract_span(text: &[String], span: Span) -> Cow<str> {
     if start_line == end_line {
         Cow::Borrowed(&text[start_line][start_col..end_col])
     } else {
-        let start_subset = text[start_line][start_col..];
-        let end_subset = text[end_line][..end_col];
-        let mid_lines = text[start_line + 1..end_line];
+        let start_subset = &text[start_line][start_col..];
+        let end_subset = &text[end_line][..end_col];
+        let mid_lines = &text[start_line + 1..end_line];
         Cow::Owned(
-            std::iter::once(start_subset)
-                .chain(mid_lines.iter())
-                .chain(std::iter::once(end_subset))
+            std::iter::once(start_subset.to_string())
+                .chain(mid_lines.iter().cloned())
+                .chain(std::iter::once(end_subset.to_string()))
                 .join("\n"),
         )
     }

@@ -22,5 +22,5 @@ autocxx_integration_tests::doctest!(
             println!("C++ says the most important numbers is {}.", ffi::do_math());
         }
     }
-)
+);
 ```
