@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod doctest;
+
 use std::{
     fs::File,
     io::{Read, Write},
@@ -300,6 +302,14 @@ impl BuilderContext for TestBuilderContext {
     fn get_dependency_recorder() -> Option<Box<dyn RebuildDependencyRecorder>> {
         None
     }
+}
+
+pub fn run_doctest(
+    cxx_code: &str,
+    header_code: &str,
+    rust_code: TokenStream
+) {
+    do_run_test_manual(cxx_code, header_code, rust_code, None, None).unwrap();
 }
 
 pub fn do_run_test_manual(
