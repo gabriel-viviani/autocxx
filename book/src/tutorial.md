@@ -2,19 +2,25 @@
 
 Example:
 
-
 ```rust
-#[autocxx_build::doctest]
-autocxx::include_cpp! {
-    #include "url/origin.h"
-    generate!("url::Origin")
-    safety!(unsafe_ffi)
-}
+autocxx_integration_tests::doctest!(
+    "",
+    indoc::indoc!("
+        #include <stdint.h>
+        inline uint32_t do_math() { return 3; }
+    "),
+    {
+        use autocxx::prelude::*;
 
-fn main() {
-    let o = ffi::url::Origin::CreateFromNormalizedTuple("https",
-        "google.com", 443);
-    let uri = o.Serialize();
-    println!("URI is {}", uri.to_str().unwrap());
-}
+        include_cpp! {
+            #include "input.h.h"
+            generate!("do_math")
+            safety!(unsafe_ffi)
+        }
+
+        fn main() {
+            println!("C++ says the most important numbers is {}.", ffi::do_math());
+        }
+    }
+)
 ```
